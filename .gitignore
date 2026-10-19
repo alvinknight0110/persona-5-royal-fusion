@@ -369,3 +369,5 @@ mysql_data_dev/
 /src/NP.LPR.WebApi/Validate/
 /src/NP.ZoneModule.WebApi/Files/Image
 /src/Np.LocalSystem.OpsControlCenter/.codex
+
+dist/

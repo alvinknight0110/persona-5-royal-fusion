@@ -25,7 +25,7 @@ export const AlarmTipsGuide: React.FC<{
       <div className="bg-red-950/35 border border-red-500/40 rounded-xl p-3.5 space-y-2">
         <div className="font-extrabold text-red-300 flex items-center gap-1.5 text-sm">
           <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
-          {formatText('配招与强化前必看四大避坑守则', lang)}
+          {formatText('合成面具与强化前必看四大避坑守则', lang)}
         </div>
         <ul className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
           <li className="bg-zinc-950/80 border border-zinc-800 rounded-lg p-2.5">
@@ -33,7 +33,7 @@ export const AlarmTipsGuide: React.FC<{
               {formatText('1. 务必最优先搞定「特性」：', lang)}
             </span>
             {formatText(
-              '特性只能透过「合体（断头台）」继承，无法靠绞刑或技能卡后天变更！开始灌经验与凹五维 99 之前，一定要先确认目标面具已继承好想要的特性。',
+              '特性只能透过「合体（断头台）」继承，无法靠绞刑或技能卡后天变更！开始灌经验与强化五维 99 之前，一定要先确认目标面具已合成并继承好想要的特性。',
               lang
             )}
           </li>
@@ -48,10 +48,10 @@ export const AlarmTipsGuide: React.FC<{
           </li>
           <li className="bg-zinc-950/80 border border-zinc-800 rounded-lg p-2.5">
             <span className="font-bold text-amber-300">
-              {formatText('3. 无技能卡的技能优先排入合成链：', lang)}
+              {formatText('3. 无技能卡的技能需靠绞刑或合成继承：', lang)}
             </span>
             {formatText(
-              '全体特大魔法、万能系被动，以及常用的「念动强化」、「咒怨强化」皆无电椅技能卡（「火焰强化」仅第三学期交涉奇美拉取得），这类技能建议优先放入合成链继承。',
+              '全体特大魔法、万能系被动，以及常用的「念动强化」、「咒怨强化」皆无电椅技能卡（「火焰强化」仅第三学期交涉奇美拉取得），需透过绞刑强化或断头台合成继承。',
               lang
             )}
           </li>
@@ -125,7 +125,7 @@ export const AlarmTipsGuide: React.FC<{
           <div className="space-y-2">
             <div className="font-extrabold text-white flex items-center gap-1.5 text-sm">
               <Zap className="w-4 h-4 text-amber-400" />
-              {formatText('实战练 P 标准 SOP（传技 + 刷五维 99 循环）', lang)}
+              {formatText('合成面具实战标准 SOP（传技 + 刷五维 99 循环）', lang)}
             </div>
             <ol className="space-y-1.5 text-zinc-300 list-decimal list-inside">
               <li>
@@ -151,16 +151,16 @@ export const AlarmTipsGuide: React.FC<{
                   {formatText('步骤① 白字绞刑（传技＋升等）：', lang)}
                 </span>
                 {formatText(
-                  '先用绞刑把「带技能的白字面具」喂给主力面具，赚大量经验并凹技能继承。',
+                  '先用绞刑把「带技能的白字面具」喂给主力面具，赚取大量经验并继承目标技能。',
                   lang
                 )}
               </li>
               <li>
                 <span className="font-semibold text-yellow-300">
-                  {formatText('步骤② 杂鱼合出黄字面具：', lang)}
+                  {formatText('步骤② 杂鱼合成黄字面具：', lang)}
                 </span>
                 {formatText(
-                  '拿刚抓的 2 只杂鱼面具随便二体合体，产出 1 只「黄字面具」。',
+                  '拿刚抓的 2 只杂鱼面具随便二体合体，合成出 1 只「黄字面具」。',
                   lang
                 )}
               </li>
@@ -211,7 +211,7 @@ export const AlarmTipsGuide: React.FC<{
             </span>
             <span className="text-xs sm:text-sm font-extrabold text-amber-300 group-hover:text-amber-200 transition">
               {formatText(
-                '【实战 Tips】天鹅绒房间合体警报、绞刑凹五维 99 与配招避坑指南',
+                '【实战 Tips】天鹅绒房间合体警报、合成面具与强化五维 99 指南',
                 lang
               )}
             </span>
@@ -262,7 +262,7 @@ export const AlarmTipsGuide: React.FC<{
                 <Lightbulb className="w-5 h-5 text-amber-400" />
                 <h3 className="text-base font-extrabold text-white">
                   {formatText(
-                    '天鹅绒房间合体警报、传技与五维 99 养成心得精炼',
+                    '天鹅绒房间合体警报、合成面具与强化五维 99 心得精炼',
                     lang
                   )}
                 </h3>

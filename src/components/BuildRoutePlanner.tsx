@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Persona, SavedBuild, SkillElement } from '../types/p5r';
+import { SavedBuild, SkillElement } from '../types/p5r';
 import {
   p5rData,
   personaMap,
@@ -7,7 +7,8 @@ import {
   traitMap,
   canPersonaInheritSkill,
   canPersonaHoldTrait,
-  generateBuildPlan,
+  findShortestFusionChain,
+  getReverseFusions,
   isPersonaAvailable
 } from '../utils/fusionEngine';
 import { formatText, matchesSearch } from '../utils/i18n';
@@ -27,7 +28,9 @@ import {
   AlertCircle,
   Disc,
   ArrowRight,
-  Wrench
+  Wrench,
+  X,
+  Zap
 } from 'lucide-react';
 
 const PRESET_BUILDS: Array<{
@@ -146,14 +149,26 @@ export const BuildRoutePlanner: React.FC<{
     '疾风吸收',
     '咒怨反弹'
   ]);
-  const [cardOrGallowsSkills, setCardOrGallowsSkills] = useState<string[]>([]);
-  const [preferredDonors, setPreferredDonors] = useState<Record<string, string>>({});
 
   // Skill picker modal state
   const [pickerSlotIdx, setPickerSlotIdx] = useState<number | null>(null);
   const [skillQuery, setSkillQuery] = useState<string>('');
   const [skillElementFilter, setSkillElementFilter] = useState<'全部' | SkillElement>('全部');
   const [showUninheritable, setShowUninheritable] = useState<boolean>(false);
+
+  // Modal 1: Single-Skill Guillotine Fusion Inheritance Route Modal („合成繼承“ button)
+  const [fusionRouteModalSkill, setFusionRouteModalSkill] = useState<string | null>(
+    null
+  );
+  const [fusionModalDonor, setFusionModalDonor] = useState<string>('');
+
+  // Modal 2: Gallows / Electric Chair Donor Persona Reverse Fusion Recipes Modal
+  const [donorRecipeModal, setDonorRecipeModal] = useState<{
+    personaName: string;
+    skillName: string;
+    contextLabel: string;
+  } | null>(null);
+  const [donorRecipeFilter, setDonorRecipeFilter] = useState<string>('');
 
   // Saved builds in LocalStorage
   const [savedBuilds, setSavedBuilds] = useState<SavedBuild[]>(() => {
@@ -176,13 +191,11 @@ export const BuildRoutePlanner: React.FC<{
     const np = personaMap.get(newPersonaName);
     if (!np) return;
     setTargetName(newPersonaName);
-    // If current trait is uninheritable by np, switch to np's innate trait
     const curTraitObj = traitMap.get(selectedTrait);
     if (!curTraitObj || !canPersonaHoldTrait(np, curTraitObj)) {
       setSelectedTrait(np.trait);
       setPreferredTraitDonor(undefined);
     }
-    // Filter current skills to those valid on np
     setSelectedSkills((prev) =>
       prev.filter((sName) => {
         const sk = skillMap.get(sName);
@@ -215,27 +228,89 @@ export const BuildRoutePlanner: React.FC<{
     [selectedTrait]
   );
 
-  const cardSet = useMemo(() => new Set(cardOrGallowsSkills), [cardOrGallowsSkills]);
+  // Calculate Trait fusion chain
+  const traitChain = useMemo(() => {
+    if (!selectedTrait || targetPersona.trait === selectedTrait) return [];
+    const traitObj = traitMap.get(selectedTrait);
+    if (!traitObj || !canPersonaHoldTrait(targetPersona, traitObj)) return null;
+    const holders =
+      preferredTraitDonor &&
+      traitObj.holders.some((h) => h.name === preferredTraitDonor)
+        ? [preferredTraitDonor]
+        : traitObj.holders.map((h) => h.name);
 
-  const buildPlan = useMemo(() => {
-    return generateBuildPlan(
+    return findShortestFusionChain(
+      holders,
       targetPersona.name,
+      enabledDlc,
+      [],
       selectedTrait,
-      selectedSkills,
-      cardSet,
-      preferredDonors,
-      preferredTraitDonor,
-      enabledDlc
+      selectedSkills
     );
   }, [
-    targetPersona.name,
+    targetPersona,
     selectedTrait,
-    selectedSkills,
-    cardSet,
-    preferredDonors,
     preferredTraitDonor,
-    enabledDlc
+    enabledDlc,
+    selectedSkills
   ]);
+
+  // Calculate Single-Skill Fusion Inheritance Chain when Modal 1 is open
+  const activeModalSkillObj = useMemo(
+    () => (fusionRouteModalSkill ? skillMap.get(fusionRouteModalSkill) : undefined),
+    [fusionRouteModalSkill]
+  );
+
+  const singleSkillFusionChain = useMemo(() => {
+    if (!activeModalSkillObj) return null;
+    const availLearners = activeModalSkillObj.learners
+      .map((l) => l.persona)
+      .filter((pName) => {
+        const p = personaMap.get(pName);
+        return p && isPersonaAvailable(p, enabledDlc);
+      });
+    const sources =
+      fusionModalDonor && availLearners.includes(fusionModalDonor)
+        ? [fusionModalDonor]
+        : availLearners;
+    if (sources.length === 0) return null;
+    return findShortestFusionChain(
+      sources,
+      targetPersona.name,
+      enabledDlc,
+      [activeModalSkillObj],
+      selectedTrait,
+      [activeModalSkillObj.name]
+    );
+  }, [
+    activeModalSkillObj,
+    fusionModalDonor,
+    targetPersona.name,
+    enabledDlc,
+    selectedTrait
+  ]);
+
+  // Calculate Reverse Fusions for Donor Persona when Modal 2 is open
+  const donorModalPersonaObj = useMemo(
+    () =>
+      donorRecipeModal ? personaMap.get(donorRecipeModal.personaName) : undefined,
+    [donorRecipeModal]
+  );
+
+  const donorReverseData = useMemo(() => {
+    if (!donorRecipeModal) return { specialRecipe: null, pairs: [] };
+    return getReverseFusions(donorRecipeModal.personaName, enabledDlc);
+  }, [donorRecipeModal, enabledDlc]);
+
+  const filteredDonorPairs = useMemo(() => {
+    return donorReverseData.pairs.filter((item) => {
+      if (!donorRecipeFilter) return true;
+      return matchesSearch(
+        `${item.p1.name} ${item.p1.arcana} ${item.p2.name} ${item.p2.arcana}`,
+        donorRecipeFilter
+      );
+    });
+  }, [donorReverseData.pairs, donorRecipeFilter]);
 
   const handleAddOrReplaceSkill = (skillName: string, slotIndex?: number) => {
     if (selectedSkills.includes(skillName)) {
@@ -258,14 +333,6 @@ export const BuildRoutePlanner: React.FC<{
     setSelectedSkills((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const toggleSkillCardMode = (skillName: string) => {
-    setCardOrGallowsSkills((prev) =>
-      prev.includes(skillName)
-        ? prev.filter((x) => x !== skillName)
-        : [...prev, skillName]
-    );
-  };
-
   const handleSaveBuild = () => {
     const newBuild: SavedBuild = {
       id: `${Date.now()}`,
@@ -273,8 +340,8 @@ export const BuildRoutePlanner: React.FC<{
       targetPersona: targetPersona.name,
       selectedTrait,
       selectedSkills,
-      cardOrGallowsSkills,
-      preferredDonors,
+      cardOrGallowsSkills: [],
+      preferredDonors: {},
       preferredTraitDonor,
       updatedAt: Date.now()
     };
@@ -288,8 +355,6 @@ export const BuildRoutePlanner: React.FC<{
     targetPersona: string;
     selectedTrait: string;
     selectedSkills: string[];
-    cardOrGallowsSkills?: string[];
-    preferredDonors?: Record<string, string>;
     preferredTraitDonor?: string;
   }) => {
     const p = personaMap.get(b.targetPersona);
@@ -304,8 +369,6 @@ export const BuildRoutePlanner: React.FC<{
         return sk && canPersonaInheritSkill(p, sk);
       })
     );
-    setCardOrGallowsSkills(b.cardOrGallowsSkills || []);
-    setPreferredDonors(b.preferredDonors || {});
   };
 
   const handleDeleteSavedBuild = (id: string) => {
@@ -405,10 +468,10 @@ export const BuildRoutePlanner: React.FC<{
         </div>
       )}
 
-      {/* Main Grid: Left (Target Persona & Trait & 8 Skills) | Right (Calculated Fusion Routes) */}
+      {/* Main Grid: Left (Target Persona & Trait & 8 Skills) | Right (Trait Route + Direct Skill Card / Gallows List) */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-        {/* Left Column: 7 cols */}
-        <div className="xl:col-span-7 space-y-5">
+        {/* Left Column: 6 cols */}
+        <div className="xl:col-span-6 space-y-5">
           {/* Step 1: Select Target Persona */}
           <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-4 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -438,7 +501,7 @@ export const BuildRoutePlanner: React.FC<{
                     value={personaSearch}
                     onChange={(e) => setPersonaSearch(e.target.value)}
                     placeholder={formatText('搜寻面具名称...', lang)}
-                    className="pl-8 pr-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-white w-44 focus:outline-none focus:border-red-500"
+                    className="pl-8 pr-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-white w-40 focus:outline-none focus:border-red-500"
                   />
                 </div>
                 <select
@@ -561,7 +624,7 @@ export const BuildRoutePlanner: React.FC<{
             )}
           </div>
 
-          {/* Step 3: 8 Skill Slots */}
+          {/* Step 3: 8 Skill Slots (Simplified, no toggle) */}
           <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-bold text-white flex items-center gap-2">
@@ -588,9 +651,6 @@ export const BuildRoutePlanner: React.FC<{
               {Array.from({ length: 8 }).map((_, slotIdx) => {
                 const sName = selectedSkills[slotIdx];
                 const sk = sName ? skillMap.get(sName) : undefined;
-                const plan = sName
-                  ? buildPlan.skillPlans.find((sp) => sp.skillName === sName)
-                  : undefined;
 
                 if (!sName || !sk) {
                   return (
@@ -608,10 +668,11 @@ export const BuildRoutePlanner: React.FC<{
                   );
                 }
 
-                const isInnate = targetPersona.skills.some(
+                const ownLearn = targetPersona.skills.find(
                   (ls) => ls.name === sName
                 );
-                const isCardMode = cardSet.has(sName);
+                const hasCard =
+                  sk.chairCards.length > 0 || Boolean(sk.skillCardRaw);
 
                 return (
                   <div
@@ -651,62 +712,34 @@ export const BuildRoutePlanner: React.FC<{
                     </p>
 
                     <div className="flex flex-wrap items-center justify-between gap-1 pt-1 border-t border-zinc-800/80 text-[11px]">
-                      {isInnate ? (
+                      {ownLearn ? (
                         <span className="text-emerald-400 font-semibold flex items-center gap-1">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          {formatText('目标面具自身习得', lang)}
+                          {formatText(
+                            `目标面具自身习得 (${
+                              ownLearn.level === 0 ? '自带' : `Lv.${ownLearn.level}`
+                            })`,
+                            lang
+                          )}
                         </span>
                       ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => toggleSkillCardMode(sName)}
-                            className={`px-2 py-0.5 rounded border font-medium transition ${
-                              isCardMode
-                                ? 'bg-purple-950/70 border-purple-500/50 text-purple-200'
-                                : 'bg-red-950/50 border-red-600/40 text-red-200 hover:bg-red-900/40'
-                            }`}
-                          >
-                            {isCardMode
-                              ? formatText('技能卡 / 绞刑', lang)
-                              : formatText(
-                                  `合成继承 (${
-                                    plan?.chain ? `${plan.chain.length}步` : '无路线'
-                                  })`,
-                                  lang
-                                )}
-                          </button>
-
-                          {!isCardMode && sk.learners.length > 0 && (
-                            <select
-                              value={preferredDonors[sName] || ''}
-                              onChange={(e) =>
-                                setPreferredDonors((prev) => ({
-                                  ...prev,
-                                  [sName]: e.target.value
-                                }))
-                              }
-                              className="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-300 max-w-[135px]"
-                            >
-                              <option value="">
-                                {formatText(
-                                  `来源：${plan?.preferredDonor || '自动'}`,
-                                  lang
-                                )}
-                              </option>
-                              {sk.learners
-                                .filter((l) => {
-                                  const lp = personaMap.get(l.persona);
-                                  return lp && isPersonaAvailable(lp, enabledDlc);
-                                })
-                                .map((l) => (
-                                  <option key={l.persona} value={l.persona}>
-                                    {formatText(l.persona, lang)} (Lv.{l.level})
-                                  </option>
-                                ))}
-                            </select>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {hasCard && (
+                            <span className="px-1.5 py-0.5 rounded bg-purple-950/60 border border-purple-600/40 text-purple-200">
+                              {formatText('有技能卡', lang)}
+                            </span>
                           )}
-                        </>
+                          {sk.learners.length > 0 && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-950/50 border border-amber-600/40 text-amber-200">
+                              {formatText(`绞刑 (${sk.learners.length})`, lang)}
+                            </span>
+                          )}
+                          {sk.isNetwork && (
+                            <span className="px-1.5 py-0.5 rounded bg-sky-950/60 border border-sky-600/40 text-sky-200">
+                              {formatText('网络处刑', lang)}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -716,18 +749,18 @@ export const BuildRoutePlanner: React.FC<{
           </div>
         </div>
 
-        {/* Right Column: 5 cols — Full Route & Step-by-Step Inheritance Plan */}
-        <div className="xl:col-span-5 space-y-5">
+        {/* Right Column: 6 cols — Trait Route + Direct Skill Card / Gallows List & Modal Triggers */}
+        <div className="xl:col-span-6 space-y-5">
           <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-4 space-y-4">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
               <div>
                 <h2 className="text-base font-extrabold text-white flex items-center gap-2">
                   <Route className="w-5 h-5 text-red-500" />
-                  {formatText('合成路线与技能继承蓝图', lang)}
+                  {formatText('特性合成路线与 8 技能获取指南', lang)}
                 </h2>
                 <p className="text-xs text-zinc-400 mt-0.5">
                   {formatText(
-                    '点击任意合成步骤右侧的「模拟此步」即可将两个素材与技能送入二体合成模拟器！',
+                    '直接检视各技能的「技能卡（电椅）」与「绞刑（强化）」来源面具（点击面具可查看合成配方），或点击「合成继承」弹窗查看断头台继承路线。',
                     lang
                   )}
                 </p>
@@ -765,7 +798,7 @@ export const BuildRoutePlanner: React.FC<{
                 </div>
                 <div className="text-[11px] text-zinc-300">
                   {formatText(
-                    '只要将想要的特性与技能先合成到以下任意一个必备素材面具上，最后进行特殊合成即可全部继承至目标面具：',
+                    '必备合成素材面具（点击任意素材面具可弹窗查看其合成配方）：',
                     lang
                   )}
                 </div>
@@ -773,13 +806,24 @@ export const BuildRoutePlanner: React.FC<{
                   {targetPersona.specialRecipe.map((ingName) => {
                     const ingP = personaMap.get(ingName);
                     return (
-                      <span
+                      <button
                         key={ingName}
-                        className="px-2 py-1 rounded bg-zinc-950 border border-rose-500/40 text-xs font-semibold text-rose-200"
+                        type="button"
+                        onClick={() => {
+                          setDonorRecipeFilter('');
+                          setDonorRecipeModal({
+                            personaName: ingName,
+                            skillName: targetPersona.name,
+                            contextLabel: `特殊合成【${targetPersona.name}】必备素材`
+                          });
+                        }}
+                        className="px-2.5 py-1 rounded bg-zinc-950 hover:bg-rose-900/50 border border-rose-500/40 text-xs font-semibold text-rose-200 transition"
                       >
                         {formatText(ingName, lang)}
-                        {ingP ? ` (${formatText(ingP.arcana, lang)} Lv.${ingP.level})` : ''}
-                      </span>
+                        {ingP
+                          ? ` (${formatText(ingP.arcana, lang)} Lv.${ingP.level})`
+                          : ''}
+                      </button>
                     );
                   })}
                 </div>
@@ -790,7 +834,7 @@ export const BuildRoutePlanner: React.FC<{
             <div className="space-y-2">
               <h3 className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
                 <Sparkles className="w-4 h-4" />
-                {formatText(`特性路线：【${selectedTrait}】`, lang)}
+                {formatText(`特性合成路线：【${selectedTrait}】`, lang)}
               </h3>
 
               {targetPersona.trait === selectedTrait ? (
@@ -801,9 +845,9 @@ export const BuildRoutePlanner: React.FC<{
                     lang
                   )}
                 </div>
-              ) : buildPlan.traitChain && buildPlan.traitChain.length > 0 ? (
+              ) : traitChain && traitChain.length > 0 ? (
                 <div className="space-y-2">
-                  {buildPlan.traitChain.map((step) => (
+                  {traitChain.map((step) => (
                     <div
                       key={`trait-step-${step.stepIndex}`}
                       className="bg-zinc-950 border border-amber-500/30 rounded-lg p-3 space-y-1.5"
@@ -859,15 +903,6 @@ export const BuildRoutePlanner: React.FC<{
                           {formatText(step.result, lang)}
                         </span>
                       </div>
-
-                      {step.carriedSkills.length > 0 && (
-                        <div className="text-[11px] text-emerald-300/90 pt-1">
-                          {formatText('★ 此路线可顺便携带目标技能：', lang)}
-                          {step.carriedSkills
-                            .map((s) => formatText(s, lang))
-                            .join('、')}
-                        </div>
-                      )}
                     </div>
                   ))}
                 </div>
@@ -882,145 +917,214 @@ export const BuildRoutePlanner: React.FC<{
               )}
             </div>
 
-            {/* 3. Skill Inheritance Routes */}
-            <div className="space-y-2.5 pt-2 border-t border-zinc-800">
+            {/* 3. Direct Skill Cards (Electric Chair) & Gallows List + "合成繼承" Modal Trigger */}
+            <div className="space-y-3 pt-3 border-t border-zinc-800">
               <h3 className="text-xs font-bold uppercase tracking-wider text-red-400 flex items-center gap-1.5">
                 <Wrench className="w-4 h-4" />
-                {formatText('8 技能获取与合成继承路线', lang)}
+                {formatText(
+                  '8 技能获取详情（技能卡 / 绞刑面具点击可看合成配方 / 断头台合成继承）',
+                  lang
+                )}
               </h3>
 
-              {buildPlan.skillPlans.length === 0 ? (
+              {selectedSkills.length === 0 ? (
                 <div className="text-xs text-zinc-500 py-4 text-center">
                   {formatText('尚未选择任何技能，请从左侧点击技能槽添加。', lang)}
                 </div>
               ) : (
-                <div className="space-y-2.5 max-h-[540px] overflow-y-auto pr-1">
-                  {buildPlan.skillPlans.map((sp) => {
-                    const sk = skillMap.get(sp.skillName);
+                <div className="space-y-3 max-h-[680px] overflow-y-auto pr-1">
+                  {selectedSkills.map((sName) => {
+                    const sk = skillMap.get(sName);
                     if (!sk) return null;
+
+                    const ownLearn = targetPersona.skills.find(
+                      (ls) => ls.name === sName
+                    );
+                    const availLearners = sk.learners.filter((l) => {
+                      const lp = personaMap.get(l.persona);
+                      return lp && isPersonaAvailable(lp, enabledDlc);
+                    });
+                    const availChairCards = sk.chairCards.filter((c) => {
+                      const cp = personaMap.get(c.persona);
+                      return cp && isPersonaAvailable(cp, enabledDlc);
+                    });
 
                     return (
                       <div
-                        key={sp.skillName}
-                        className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 space-y-2"
+                        key={sName}
+                        className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-2.5"
                       >
+                        {/* Header row: Skill Name + "合成繼承" Button */}
                         <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-2">
                             <ElementBadge element={sk.element} lang={lang} />
-                            <span className="text-xs font-bold text-white">
-                              {formatText(sp.skillName, lang)}
+                            <span className="text-sm font-extrabold text-white">
+                              {formatText(sk.name, lang)}
                             </span>
+                            {sk.cost && (
+                              <span className="text-xs text-amber-300 font-medium">
+                                ({sk.cost})
+                              </span>
+                            )}
                           </div>
-                          <span className="text-[11px] px-2 py-0.5 rounded bg-zinc-900 border border-zinc-700 text-zinc-300">
-                            {sp.mode === 'innate'
-                              ? formatText('目标面具自带/升级习得', lang)
-                              : sp.mode === 'card_or_gallows'
-                              ? formatText('技能卡 / 绞刑强化', lang)
-                              : sp.mode === 'network'
-                              ? formatText('网络合成（公开处刑）', lang)
-                              : formatText(
-                                  `合成继承（由 ${sp.preferredDonor} 起共 ${
-                                    sp.chain?.length || 0
-                                  } 步）`,
-                                  lang
-                                )}
-                          </span>
+
+                          {ownLearn ? (
+                            <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-600/50 text-emerald-300 font-bold flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              {formatText(
+                                `自身习得 (${
+                                  ownLearn.level === 0
+                                    ? '自带'
+                                    : `Lv.${ownLearn.level}`
+                                })`,
+                                lang
+                              )}
+                            </span>
+                          ) : (
+                            availLearners.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFusionModalDonor('');
+                                  setFusionRouteModalSkill(sName);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow transition"
+                              >
+                                <Route className="w-3.5 h-3.5" />
+                                {formatText('合成继承', lang)}
+                              </button>
+                            )
+                          )}
                         </div>
 
-                        {sp.mode === 'fusion' && sp.chain && sp.chain.length > 0 && (
-                          <div className="space-y-1.5 pt-1">
-                            {sp.chain.map((st) => (
-                              <div
-                                key={`${sp.skillName}-step-${st.stepIndex}`}
-                                className="flex items-center justify-between gap-2 bg-zinc-900/70 rounded px-2.5 py-1.5 text-[11px]"
-                              >
-                                <div className="flex flex-wrap items-center gap-1">
-                                  <span className="text-zinc-500 font-mono">
-                                    {st.stepIndex}.
-                                  </span>
-                                  {st.ingredients.map((ing, i) => (
-                                    <React.Fragment key={`${ing}-${i}`}>
-                                      {i > 0 && (
-                                        <span className="text-zinc-500">+</span>
-                                      )}
-                                      <span
-                                        className={
-                                          i === 0
-                                            ? 'text-amber-300 font-semibold'
-                                            : 'text-zinc-300'
-                                        }
-                                      >
-                                        {formatText(ing, lang)}
-                                      </span>
-                                    </React.Fragment>
-                                  ))}
-                                  <ArrowRight className="w-3 h-3 text-red-400 mx-0.5" />
-                                  <span className="text-white font-bold">
-                                    {formatText(st.result, lang)}
-                                  </span>
-                                </div>
-                                {st.ingredients.length === 2 && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      onSendToSimulator(
-                                        st.ingredients[0],
-                                        st.ingredients[1],
-                                        st.carriedSkills,
-                                        undefined,
-                                        selectedTrait
-                                      )
-                                    }
-                                    className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-red-600 text-zinc-200 hover:text-white transition shrink-0"
-                                  >
-                                    {formatText('模拟', lang)}
-                                  </button>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {sp.mode === 'card_or_gallows' && (
-                          <div className="text-[11px] text-zinc-300 bg-purple-950/20 border border-purple-700/30 rounded p-2 space-y-1">
-                            {(sk.chairCards.length > 0 || sk.skillCardRaw) && (
-                              <div className="flex items-center gap-1 text-purple-200">
+                        {/* Body: If not innate, directly show Skill Card & Gallows Personas */}
+                        {!ownLearn && (
+                          <div className="space-y-2 text-xs">
+                            {/* Skill Card Section */}
+                            <div className="p-2.5 rounded-lg bg-purple-950/20 border border-purple-700/30 space-y-1.5">
+                              <div className="font-bold text-purple-300 flex items-center gap-1.5">
                                 <Disc className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                                {formatText('电椅技能卡来源：', lang)}
-                                {sk.chairCards.length > 0
-                                  ? sk.chairCards
-                                      .map(
-                                        (c) =>
-                                          `${formatText(c.persona, lang)}${
+                                {formatText('技能卡（电椅道具化 / 交涉）：', lang)}
+                              </div>
+                              {availChairCards.length > 0 ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {availChairCards.map((c, idx) => {
+                                    const cp = personaMap.get(c.persona);
+                                    return (
+                                      <button
+                                        key={`${c.persona}-${idx}`}
+                                        type="button"
+                                        onClick={() => {
+                                          setDonorRecipeFilter('');
+                                          setDonorRecipeModal({
+                                            personaName: c.persona,
+                                            skillName: sName,
+                                            contextLabel: c.alarm
+                                              ? `警报电椅道具化产出【${sName}】技能卡`
+                                              : `一般电椅道具化产出【${sName}】技能卡`
+                                          });
+                                        }}
+                                        className="px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-purple-900/60 border border-purple-500/40 text-purple-100 font-medium transition flex items-center gap-1"
+                                      >
+                                        <span>{formatText(c.persona, lang)}</span>
+                                        {cp && (
+                                          <span className="text-[10px] text-purple-300">
+                                            ({formatText(cp.arcana, lang)} Lv.{cp.level})
+                                          </span>
+                                        )}
+                                        <span
+                                          className={`text-[10px] px-1 rounded ${
                                             c.alarm
-                                              ? formatText('(警报电椅)', lang)
-                                              : formatText('(一般电椅)', lang)
-                                          }`
-                                      )
-                                      .join('、')
-                                  : formatText(sk.skillCardRaw, lang)}
-                              </div>
-                            )}
-                            {sk.learners.length > 0 && (
-                              <div className="text-zinc-400">
-                                {formatText('绞刑（强化）献祭面具：', lang)}
-                                {sk.learners
-                                  .map(
-                                    (l) =>
-                                      `${formatText(l.persona, lang)}(Lv.${l.level})`
-                                  )
-                                  .join('、')}
-                              </div>
-                            )}
-                          </div>
-                        )}
+                                              ? 'bg-red-600/40 text-red-200'
+                                              : 'bg-zinc-800 text-zinc-300'
+                                          }`}
+                                        >
+                                          {c.alarm
+                                            ? formatText('警报电椅', lang)
+                                            : formatText('一般电椅', lang)}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : sk.skillCardRaw ? (
+                                <div className="text-purple-200 text-[11px]">
+                                  {formatText(sk.skillCardRaw, lang)}
+                                </div>
+                              ) : (
+                                <div className="text-zinc-500 text-[11px]">
+                                  {formatText(
+                                    '无电椅技能卡（请透过下方绞刑强化或断头台合成继承）',
+                                    lang
+                                  )}
+                                </div>
+                              )}
+                            </div>
 
-                        {sp.mode === 'network' && (
-                          <div className="text-[11px] text-sky-300 bg-sky-950/30 border border-sky-700/30 rounded p-2">
-                            {formatText(
-                              '此技能需透过天鹅绒房间「网络合成（公开处刑）」机率习得，再经由合成或绞刑继承。',
-                              lang
-                            )}
+                            {/* Gallows (Strengthening) Section */}
+                            <div className="p-2.5 rounded-lg bg-amber-950/15 border border-amber-700/30 space-y-1.5">
+                              <div className="font-bold text-amber-300 flex items-center justify-between">
+                                <span className="flex items-center gap-1.5">
+                                  <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                  {formatText(
+                                    '绞刑（强化继承）献祭面具（点击面具查看合成配方）：',
+                                    lang
+                                  )}
+                                </span>
+                              </div>
+
+                              {availLearners.length > 0 ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {availLearners.map((l) => {
+                                    const lp = personaMap.get(l.persona);
+                                    return (
+                                      <button
+                                        key={l.persona}
+                                        type="button"
+                                        onClick={() => {
+                                          setDonorRecipeFilter('');
+                                          setDonorRecipeModal({
+                                            personaName: l.persona,
+                                            skillName: sName,
+                                            contextLabel: l.isInnate
+                                              ? `自带技能【${sName}】（合成出即可直接绞刑）`
+                                              : `需升至 Lv.${l.level} 习得技能【${sName}】`
+                                          });
+                                        }}
+                                        className="px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-amber-900/50 border border-amber-500/40 text-zinc-100 hover:text-white font-medium transition flex items-center gap-1"
+                                      >
+                                        <span className="font-bold text-amber-200">
+                                          {formatText(l.persona, lang)}
+                                        </span>
+                                        <span className="text-[10px] text-zinc-400">
+                                          [{formatText(l.arcana, lang)} Lv.
+                                          {lp?.level || l.level}]
+                                        </span>
+                                        <span className="text-[10px] px-1 rounded bg-zinc-800 text-amber-300">
+                                          {l.isInnate
+                                            ? formatText('自带', lang)
+                                            : formatText(`习得Lv.${l.level}`, lang)}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : sk.isNetwork ? (
+                                <div className="text-sky-300 text-[11px]">
+                                  {formatText(
+                                    '此技能无常规习得面具，需透过「网络合成（公开处刑）」机率取得后再用绞刑继承。',
+                                    lang
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="text-zinc-500 text-[11px]">
+                                  {formatText(
+                                    '需透过警报合体技能变异取得。',
+                                    lang
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1032,6 +1136,361 @@ export const BuildRoutePlanner: React.FC<{
           </div>
         </div>
       </div>
+
+      {/* Modal 1: Single-Skill Guillotine Fusion Route Modal ("合成繼承" Button) */}
+      {fusionRouteModalSkill && activeModalSkillObj && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-red-500/60 rounded-2xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-4 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Route className="w-5 h-5 text-red-500" />
+                <div>
+                  <h3 className="text-base font-extrabold text-white">
+                    {formatText(
+                      `【${activeModalSkillObj.name}】断头台合成继承路线 → ${targetPersona.name}`,
+                      lang
+                    )}
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {formatText(
+                      '所有中继面具均已验证可合法继承此技能属性',
+                      lang
+                    )}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFusionRouteModalSkill(null)}
+                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 overflow-y-auto">
+              {/* Donor selector */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-zinc-950 p-3 rounded-xl border border-zinc-800">
+                <span className="text-xs text-zinc-300 font-semibold">
+                  {formatText('选择起始技能来源面具：', lang)}
+                </span>
+                <select
+                  value={fusionModalDonor}
+                  onChange={(e) => setFusionModalDonor(e.target.value)}
+                  className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-amber-300 font-bold"
+                >
+                  <option value="">
+                    {formatText('自动选择最短合成路线来源', lang)}
+                  </option>
+                  {activeModalSkillObj.learners
+                    .filter((l) => {
+                      const lp = personaMap.get(l.persona);
+                      return lp && isPersonaAvailable(lp, enabledDlc);
+                    })
+                    .map((l) => (
+                      <option key={l.persona} value={l.persona}>
+                        [{formatText(l.arcana, lang)}] {formatText(l.persona, lang)}{' '}
+                        ({l.isInnate ? formatText('自带', lang) : `Lv.${l.level}`})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {/* Steps */}
+              {singleSkillFusionChain && singleSkillFusionChain.length > 0 ? (
+                <div className="space-y-2.5">
+                  {singleSkillFusionChain.map((step) => (
+                    <div
+                      key={`modal-fusion-step-${step.stepIndex}`}
+                      className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-red-400">
+                          {formatText(`步骤 ${step.stepIndex}`, lang)}
+                          {step.type === 'treasure'
+                            ? formatText('（宝魔升降阶）', lang)
+                            : step.type === 'same_arcana'
+                            ? formatText('（同牌降阶）', lang)
+                            : step.type === 'special'
+                            ? formatText('（特殊合成）', lang)
+                            : formatText('（一般二体合成）', lang)}
+                        </span>
+                        {step.ingredients.length === 2 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFusionRouteModalSkill(null);
+                              onSendToSimulator(
+                                step.ingredients[0],
+                                step.ingredients[1],
+                                [activeModalSkillObj.name],
+                                undefined,
+                                selectedTrait
+                              );
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition"
+                          >
+                            <Play className="w-3 h-3" />
+                            {formatText('送入模拟器演练', lang)}
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                        {step.ingredients.map((ing, i) => {
+                          const ingP = personaMap.get(ing);
+                          return (
+                            <React.Fragment key={`${ing}-${i}`}>
+                              {i > 0 && <span className="text-zinc-500">+</span>}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFusionRouteModalSkill(null);
+                                  setDonorRecipeFilter('');
+                                  setDonorRecipeModal({
+                                    personaName: ing,
+                                    skillName: activeModalSkillObj.name,
+                                    contextLabel: `合成步骤 ${step.stepIndex} 素材面具`
+                                  });
+                                }}
+                                className={`px-2.5 py-1 rounded border font-semibold transition ${
+                                  i === 0
+                                    ? 'bg-amber-950/40 border-amber-500/50 text-amber-200 hover:bg-amber-900/50'
+                                    : 'bg-zinc-900 border-zinc-700 text-zinc-200 hover:bg-zinc-800'
+                                }`}
+                              >
+                                {formatText(ing, lang)}
+                                {ingP
+                                  ? ` (${formatText(ingP.arcana, lang)} Lv.${ingP.level})`
+                                  : ''}
+                              </button>
+                            </React.Fragment>
+                          );
+                        })}
+                        <ArrowRight className="w-4 h-4 text-red-500 mx-1" />
+                        <span className="px-2.5 py-1 rounded bg-red-950/60 border border-red-500/60 text-white font-extrabold">
+                          {formatText(step.result, lang)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-6 text-center text-xs text-zinc-400 bg-zinc-950 rounded-xl border border-zinc-800">
+                  {formatText(
+                    '未找到可直接传递此技能的断头台合成路径，建议使用「技能卡」或「绞刑」强化！',
+                    lang
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 2: Gallows / Electric Chair Donor Persona Reverse Fusion Recipe Modal */}
+      {donorRecipeModal && donorModalPersonaObj && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-amber-500/60 rounded-2xl max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-4 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded bg-red-600 text-white text-xs font-bold">
+                    Lv.{donorModalPersonaObj.level}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-200 text-xs font-semibold">
+                    {formatText(donorModalPersonaObj.arcana, lang)}
+                  </span>
+                  <h3 className="text-base font-extrabold text-white">
+                    {formatText(
+                      `如何合成【${donorModalPersonaObj.name}】`,
+                      lang
+                    )}
+                  </h3>
+                </div>
+                <p className="text-xs text-amber-300 mt-1 font-medium">
+                  {formatText(donorRecipeModal.contextLabel, lang)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDonorRecipeModal(null)}
+                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 overflow-y-auto">
+              {/* If Special Fusion */}
+              {donorReverseData.specialRecipe && (
+                <div className="bg-rose-950/30 border border-rose-500/50 rounded-xl p-3.5 space-y-2">
+                  <div className="text-xs font-bold text-rose-300">
+                    {formatText(
+                      `★ 【${donorModalPersonaObj.name}】为特殊合成（集体断头台），需使用以下固定素材合成：`,
+                      lang
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {donorReverseData.specialRecipe.map((ing) => (
+                      <button
+                        key={ing.name}
+                        type="button"
+                        onClick={() =>
+                          setDonorRecipeModal({
+                            personaName: ing.name,
+                            skillName: donorRecipeModal.skillName,
+                            contextLabel: `特殊合成【${donorModalPersonaObj.name}】的素材面具`
+                          })
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 border border-rose-500/40 text-xs text-white font-semibold transition"
+                      >
+                        {formatText(ing.name, lang)}{' '}
+                        <span className="text-zinc-400 font-normal">
+                          ({formatText(ing.arcana, lang)} Lv.{ing.level})
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* If Treasure Demon */}
+              {donorModalPersonaObj.isTreasure && (
+                <div className="bg-yellow-950/30 border border-yellow-500/50 rounded-xl p-4 text-xs text-yellow-200">
+                  {formatText(
+                    `【${donorModalPersonaObj.name}】为宝魔，无法透过合成产出，需于殿堂或印象空间遭遇捕获后登录全书。`,
+                    lang
+                  )}
+                </div>
+              )}
+
+              {/* Normal 2-body / Same-Arcana / Treasure Demon Recipes */}
+              {!donorModalPersonaObj.isTreasure &&
+                donorReverseData.pairs.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-zinc-300">
+                        {formatText(
+                          `共有 ${filteredDonorPairs.length} 组逆向合成配方（依召唤费用由低至高排序）：`,
+                          lang
+                        )}
+                      </span>
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2" />
+                        <input
+                          type="text"
+                          value={donorRecipeFilter}
+                          onChange={(e) => setDonorRecipeFilter(e.target.value)}
+                          placeholder={formatText('筛选素材面具...', lang)}
+                          className="pl-8 pr-3 py-1 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="max-h-[380px] overflow-y-auto border border-zinc-800 rounded-xl">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead className="sticky top-0 bg-zinc-950 text-zinc-400 border-b border-zinc-800">
+                          <tr>
+                            <th className="py-2 px-3">
+                              {formatText('素材 A', lang)}
+                            </th>
+                            <th className="py-2 px-3">
+                              {formatText('素材 B', lang)}
+                            </th>
+                            <th className="py-2 px-3">
+                              {formatText('类型', lang)}
+                            </th>
+                            <th className="py-2 px-3">
+                              {formatText('预估费用', lang)}
+                            </th>
+                            <th className="py-2 px-3 text-right">
+                              {formatText('操作', lang)}
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-800/70">
+                          {filteredDonorPairs.slice(0, 120).map((pair, idx) => (
+                            <tr
+                              key={`${pair.p1.name}-${pair.p2.name}-${idx}`}
+                              className="hover:bg-zinc-800/50 transition"
+                            >
+                              <td className="py-2 px-3">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setDonorRecipeModal({
+                                      personaName: pair.p1.name,
+                                      skillName: donorRecipeModal.skillName,
+                                      contextLabel: `合成【${donorModalPersonaObj.name}】的素材面具`
+                                    })
+                                  }
+                                  className="font-semibold text-white hover:text-amber-300"
+                                >
+                                  {formatText(pair.p1.name, lang)}
+                                </button>
+                                <span className="text-[11px] text-zinc-400 ml-1">
+                                  ({formatText(pair.p1.arcana, lang)} Lv.
+                                  {pair.p1.level})
+                                </span>
+                              </td>
+                              <td className="py-2 px-3">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setDonorRecipeModal({
+                                      personaName: pair.p2.name,
+                                      skillName: donorRecipeModal.skillName,
+                                      contextLabel: `合成【${donorModalPersonaObj.name}】的素材面具`
+                                    })
+                                  }
+                                  className="font-semibold text-white hover:text-amber-300"
+                                >
+                                  {formatText(pair.p2.name, lang)}
+                                </button>
+                                <span className="text-[11px] text-zinc-400 ml-1">
+                                  ({formatText(pair.p2.arcana, lang)} Lv.
+                                  {pair.p2.level})
+                                </span>
+                              </td>
+                              <td className="py-2 px-3">
+                                <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[11px]">
+                                  {pair.type === 'treasure'
+                                    ? formatText('宝魔升降', lang)
+                                    : pair.type === 'same_arcana'
+                                    ? formatText('同牌降阶', lang)
+                                    : pair.type === 'special_2'
+                                    ? formatText('二体特殊', lang)
+                                    : formatText('一般二体', lang)}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 font-mono text-zinc-300">
+                                ¥{pair.approxCost.toLocaleString()}
+                              </td>
+                              <td className="py-2 px-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDonorRecipeModal(null);
+                                    onSendToSimulator(pair.p1.name, pair.p2.name);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-600/90 hover:bg-red-500 text-white text-[11px] font-semibold"
+                                >
+                                  <Play className="w-3 h-3" />
+                                  {formatText('模拟', lang)}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Skill Picker Modal */}
       {pickerSlotIdx !== null && (
